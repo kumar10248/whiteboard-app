@@ -1,0 +1,27 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "nodemon server.js",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.4.1",
+    "nanoid": "^5.1.9",
+    "nodemon": "^3.1.14",
+    "openai": "^6.34.0",
+    "redis": "^5.12.1",
+    "socket.io": "^4.8.3",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.30"
+  }
+}
