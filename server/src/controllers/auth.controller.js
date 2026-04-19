@@ -1,38 +1,29 @@
-const User=require("../models/User")
-const bcrypt = require("bcrypt")
-const jwt = require("jsonwebtoken")
-const {generateAccessToken,generateRefreshToken}=require("../utils/generateToken")
+// server/src/controllers/auth.controller.js
+const User    = require("../models/User")
+const bcrypt  = require("bcrypt")
+const jwt     = require("jsonwebtoken")
 require("dotenv").config()
 
-const refreshAccessToken = async (req, res) => {
-
-const refreshToken = req.cookies?.refreshToken;
-
-  if (!refreshToken) {
-    throw new ApiError(401, "No refresh token");
-  }
-
-  let decoded;
-
-try {
-  decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
-} catch (err) {
-  throw new ApiError(401, "Invalid refresh token");
+/* ── Token generators ────────────────────────────────────────────── */
+function generateAccessToken(user) {
+  return jwt.sign(
+    { id: user._id, email: user.email },
+    process.env.JWT_SECRET,
+    { expiresIn: "15m", issuer: "whiteboard-app" }
+  )
 }
 
-  const user = await User.findById(decoded.id);
-
-  if (!user || user.refreshToken !== refreshToken) {
-    throw new ApiError(401, "Invalid refresh token");
-  }
-
-  const newAccessToken = generateAccessToken(user);
-
-  res.status(200).json({
-  success: true,
-  accessToken: newAccessToken
-});
+function generateRefreshToken(user) {
+  return jwt.sign(
+    { id: user._id },
+    process.env.JWT_REFRESH_SECRET,
+    { expiresIn: "7d", issuer: "whiteboard-app" }
+  )
 }
+
+const PASSWORD_REGEX = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[@$!%*?&]).{8,}$/
+
+/* ── POST /api/auth/register ─────────────────────────────────────── */
 const register = async (req, res) => {
   try {
     const { name, email, password } = req.body
@@ -41,47 +32,40 @@ const register = async (req, res) => {
       return res.status(400).json({ msg: "All fields are required" })
     }
 
-    const emailNormalized = email.toLowerCase().trim()
-
-    const passwordRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[@$!%*?&]).{8,}$/
-
-    if (!passwordRegex.test(password)) {
+    if (!PASSWORD_REGEX.test(password)) {
       return res.status(400).json({
-        msg: "Password must be at least 8 characters and include letters & numbers"
+        msg: "Password must be 8+ characters and include a letter, number, and special character"
       })
     }
 
-    const existUser = await User.findOne({ email: emailNormalized })
-    if (existUser) {
+    const emailNorm = email.toLowerCase().trim()
+
+    const exists = await User.findOne({ email: emailNorm })
+    if (exists) {
       return res.status(409).json({ msg: "User already exists" })
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10)
-
-    await User.create({
-      name,
-      email: emailNormalized,
-      password: hashedPassword
-    })
+    const hashed = await bcrypt.hash(password, 10)
+    await User.create({ name: name.trim(), email: emailNorm, password: hashed })
 
     res.status(201).json({ msg: "Registered successfully" })
 
   } catch (err) {
-    console.error(err)
+    console.error("register error:", err)
     res.status(500).json({ msg: "Something went wrong" })
   }
 }
 
+/* ── POST /api/auth/login ────────────────────────────────────────── */
 const login = async (req, res) => {
   try {
     const { email, password } = req.body
+
     if (!email || !password) {
       return res.status(400).json({ msg: "All fields are required" })
     }
 
-    const emailNormalized = email.toLowerCase().trim()
-
-    const user = await User.findOne({ email: emailNormalized })
+    const user = await User.findOne({ email: email.toLowerCase().trim() })
     if (!user) {
       return res.status(401).json({ msg: "Invalid credentials" })
     }
@@ -91,95 +75,153 @@ const login = async (req, res) => {
       return res.status(401).json({ msg: "Invalid credentials" })
     }
 
-    
-    const token = generateAccessToken(user)
-    const refreshToken=generateRefreshToken(user)
-    user.refreshToken=refreshToken;
+    const token        = generateAccessToken(user)
+    const refreshToken = generateRefreshToken(user)
+
+    user.refreshToken = refreshToken
     await user.save()
 
-
-res.cookie("refreshToken", refreshToken, {
-  httpOnly: true,
-  secure: true,
-  sameSite: "strict"
-});
-    res.status(200).json({
-      token,
-      msg: "Login successful",
-  
+    // Refresh token in httpOnly cookie — not accessible by JS
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      secure:   process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge:   7 * 24 * 60 * 60 * 1000,   // 7 days in ms
     })
-    
 
-  } catch (error) {
-    console.error(error)
+    res.status(200).json({ token, msg: "Login successful" })
+
+  } catch (err) {
+    console.error("login error:", err)
     res.status(500).json({ msg: "Internal server error" })
   }
 }
 
-const getUserData=async(req,res)=>{
+/* ── POST /api/auth/refresh ──────────────────────────────────────── */
+const refreshAccessToken = async (req, res) => {
   try {
-    const user=await User.findById(req.user.id).select("-password -refreshToken")
+    const refreshToken = req.cookies?.refreshToken
+    if (!refreshToken) {
+      return res.status(401).json({ msg: "No refresh token" })
+    }
+
+    let decoded
+    try {
+      decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET, {
+        issuer: "whiteboard-app",
+      })
+    } catch {
+      return res.status(401).json({ msg: "Invalid or expired refresh token" })
+    }
+
+    const user = await User.findById(decoded.id)
+    if (!user || user.refreshToken !== refreshToken) {
+      return res.status(401).json({ msg: "Refresh token mismatch" })
+    }
+
+    const newAccessToken = generateAccessToken(user)
+    res.status(200).json({ token: newAccessToken })
+
+  } catch (err) {
+    console.error("refreshAccessToken error:", err)
+    res.status(500).json({ msg: "Internal server error" })
+  }
+}
+
+/* ── POST /api/auth/logout ───────────────────────────────────────── */
+const logout = async (req, res) => {
+  try {
+    const refreshToken = req.cookies?.refreshToken
+    if (refreshToken) {
+      // Nullify refresh token in DB so it can't be reused
+      await User.findOneAndUpdate(
+        { refreshToken },
+        { $set: { refreshToken: null } }
+      )
+    }
+
+    res.clearCookie("refreshToken", {
+      httpOnly: true,
+      secure:   process.env.NODE_ENV === "production",
+      sameSite: "strict",
+    })
+
+    res.status(200).json({ msg: "Logged out successfully" })
+
+  } catch (err) {
+    console.error("logout error:", err)
+    res.status(500).json({ msg: "Internal server error" })
+  }
+}
+
+/* ── GET /api/auth/me ────────────────────────────────────────────── */
+const getMe = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id)
+      .select("-password -refreshToken")
+      .lean()
 
     if (!user) {
-  return res.status(404).json({ msg: "User not found" })
-}
-     res.status(200).json({
-      success: true,
-      msg: "User data fetched successfully",
-      user
-    })
+      return res.status(404).json({ msg: "User not found" })
+    }
 
-  } catch (error) {
-    console.error("getUserData error:", error)
+    res.status(200).json({ success: true, user })
 
-    res.status(500).json({
-      success: false,
-      msg: "Internal server error"
-    })
+  } catch (err) {
+    console.error("getMe error:", err)
+    res.status(500).json({ msg: "Internal server error" })
   }
 }
 
-const changePassword=async(req,res)=>{
-    try{
-      const user = await User.findById(req.user.id).select("+password");
+/* ── PATCH /api/auth/password ────────────────────────────────────── */
+const changePassword = async (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body
 
-  if (!user) {
-    return res.status(401).json({msg:"User not found"});
-  }
-
-const oldPassword = req.body.oldPassword?.trim()
-const newPassword = req.body.newPassword?.trim()
- 
- if (!oldPassword || !newPassword) {
+    if (!oldPassword?.trim() || !newPassword?.trim()) {
       return res.status(400).json({ msg: "oldPassword and newPassword are required" })
     }
- 
-    const passwordRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[@$!%*?&]).{8,}$/
-    if (!passwordRegex.test(newPassword)) {
+
+    if (!PASSWORD_REGEX.test(newPassword)) {
       return res.status(400).json({
-        msg: "newPassword must be at least 8 characters and include letters & numbers"
+        msg: "New password must be 8+ characters with a letter, number, and special character"
       })
     }
 
-    const isMatch=await bcrypt.compare(oldPassword,user.password)
-    if(!isMatch){
-        return res.status(401).json({msg:"old password is Incorrect"})
-    }
-  if (oldPassword === newPassword){
-        return res.status(400).json({msg:"new password must be different"})
-
+    if (oldPassword === newPassword) {
+      return res.status(400).json({ msg: "New password must be different from old password" })
     }
 
-    const hashNewpassword=await bcrypt.hash(newPassword,10)
-    user.password=hashNewpassword;
-    user.passwordChangedAt = Date.now()
-   await user.save()
-   res.status(200).json({msg:"password updated successfully"})
-}catch(error){
-return res.status(500).json({msg:"server error"})
-}
-   
+    // Explicitly select password — it's excluded by default
+    const user = await User.findById(req.user.id).select("+password")
+    if (!user) {
+      return res.status(404).json({ msg: "User not found" })
+    }
 
+    const isMatch = await bcrypt.compare(oldPassword, user.password)
+    if (!isMatch) {
+      return res.status(401).json({ msg: "Old password is incorrect" })
+    }
+
+    user.password          = await bcrypt.hash(newPassword, 10)
+    user.passwordChangedAt = new Date()
+    // Invalidate all existing refresh tokens by clearing it
+    user.refreshToken      = null
+    await user.save()
+
+    // Clear refresh token cookie — force re-login on all devices
+    res.clearCookie("refreshToken", {
+      httpOnly: true,
+      secure:   process.env.NODE_ENV === "production",
+      sameSite: "strict",
+    })
+
+    res.status(200).json({ msg: "Password updated. Please log in again." })
+
+  } catch (err) {
+    console.error("changePassword error:", err)
+    res.status(500).json({ msg: "Internal server error" })
+  }
 }
 
-module.exports = { register, login ,changePassword,refreshAccessToken,getUserData}
+module.exports = { register, login, refreshAccessToken, logout, getMe, changePassword }
