@@ -1,26 +1,52 @@
-@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Cabinet+Grotesk:wght@400;500;700;800;900&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg:       #0c0c10;
+  --bg2:      #131318;
+  --bg3:      #1a1a22;
+  --bg4:      #22222e;
+  --border:   #22222e;
+  --border2:  #2e2e3e;
+  --text:     #eaeaf4;
+  --muted:    #58587a;
+  --accent:   #6c63ff;
+  --accent2:  #4f46e5;
+  --green:    #22d3a0;
+  --red:      #f87171;
+  --yellow:   #fbbf24;
+  --orange:   #fb923c;
+  --mono:     'DM Mono', monospace;
+  --sans:     'Cabinet Grotesk', sans-serif;
+  --r:        10px;
+  --rl:       16px;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+html, body { height: 100%; }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  overflow-y: auto !important; min-height: 100vh; 
 }
+
+a { color: inherit; text-decoration: none; }
+button { cursor: pointer; font-family: var(--sans); }
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+@keyframes fadeUp    { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeIn    { from { opacity: 0; } to { opacity: 1; } }
+@keyframes spin      { to   { transform: rotate(360deg); } }
+@keyframes pulse     { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
+@keyframes shimmer   { 0% { background-position: -200% center; } 100% { background-position: 200% center; } }
+@keyframes blink     { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+@keyframes slideInL  { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes popIn     { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: scale(1); } }
+@keyframes shake     { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }

@@ -9,7 +9,7 @@ function generateAccessToken(user) {
   return jwt.sign(
     { id: user._id, email: user.email },
     process.env.JWT_SECRET,
-    { expiresIn: "15m", issuer: "whiteboard-app" }
+    { expiresIn: "1d", issuer: "whiteboard-app" }
   )
 }
 
@@ -60,17 +60,20 @@ const register = async (req, res) => {
 const login = async (req, res) => {
   try {
     const { email, password } = req.body
+    console.log("Login attempt for email:", email)
+    console.log("Password provided:",password ? "Yes" : "No")
 
     if (!email || !password) {
       return res.status(400).json({ msg: "All fields are required" })
     }
 
-    const user = await User.findOne({ email: email.toLowerCase().trim() })
+   const user = await User.findOne({ email: email.toLowerCase().trim() }).select("+password")
     if (!user) {
       return res.status(401).json({ msg: "Invalid credentials" })
     }
 
     const isMatch = await bcrypt.compare(password, user.password)
+
     if (!isMatch) {
       return res.status(401).json({ msg: "Invalid credentials" })
     }

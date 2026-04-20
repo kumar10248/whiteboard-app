@@ -41,7 +41,7 @@ module.exports = function initSocket(httpServer) {
       if (!token) return next(new Error("Authentication required"))
 
       const decoded = jwt.verify(token, process.env.JWT_SECRET, {
-        issuer: "ai-review-app",
+        issuer: "whiteboard-app",
       })
 
       const user = await User.findById(decoded.id)

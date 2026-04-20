@@ -49,11 +49,10 @@ boardSchema.index({ ownerId: 1 })
 boardSchema.index({ members: 1 })
 
 // Keep only last 10 snapshots automatically
-boardSchema.pre("save", function (next) {
-  if (this.snapshots.length > 10) {
+boardSchema.pre("save", function () {
+  if (this.snapshots && this.snapshots.length > 10) {
     this.snapshots = this.snapshots.slice(-10)
   }
-  next()
 })
 
 module.exports = mongoose.model("Board", boardSchema)
