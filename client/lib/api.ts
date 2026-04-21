@@ -1,5 +1,5 @@
 // client/lib/api.ts
-const BASE = "http://localhost:8000/api/v1"
+const BASE = "http://localhost:5000/api/v1"
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null

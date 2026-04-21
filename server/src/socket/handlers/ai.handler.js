@@ -131,12 +131,13 @@ module.exports = function registerAIHandlers(io, socket) {
       const delta  = await insertAIShapes(boardId, shapes)
       const base64 = Buffer.from(delta).toString("base64")
 
-      // Broadcast Yjs update to ALL clients in the room
-      // Every client merges this delta into their local Yjs doc
+      // Broadcast Yjs update to ALL clients in the room (including sender).
+      // Sender does NOT insert locally before calling ai:place,
+      // so sender also needs this update to see the shapes.
       io.to(boardId).emit("yjs:update", {
         update: base64,
         userId,
-        source: "ai",   // optional: client can animate AI-placed shapes differently
+        source: "ai",
       })
 
       // Save a labeled snapshot before the diagram changes

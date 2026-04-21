@@ -26,7 +26,14 @@ function getBoardUsers(boardId) {
 
 /* ─── Helper: broadcast presence to everyone in a board room ────── */
 function broadcastPresence(io, boardId) {
-  const users = Array.from(getBoardUsers(boardId).values())
+  const allSockets = Array.from(getBoardUsers(boardId).values())
+  // Deduplicate by userId — same user with multiple tabs appears once
+  const seen  = new Set()
+  const users = allSockets.filter(u => {
+    if (seen.has(u.id)) return false
+    seen.add(u.id)
+    return true
+  })
   io.to(boardId).emit("presence:update", { users })
 }
 
@@ -127,7 +134,7 @@ module.exports = function registerBoardHandlers(io, socket) {
      Client sends a Yjs binary delta (Uint8Array encoded as base64).
      Server applies it to the server-side Y.Doc and broadcasts
      to ALL other clients in the room. */
-  socket.on("yjs:update", async ({ boardId, update, opMeta }) => {
+  socket.on("yjs:update", async ({ boardId, update, opMeta, senderId }) => {
     try {
       // Decode base64 → Uint8Array
       const uint8 = new Uint8Array(Buffer.from(update, "base64"))
@@ -137,7 +144,8 @@ module.exports = function registerBoardHandlers(io, socket) {
 
       // Broadcast to all OTHER clients in the room
       socket.to(boardId).emit("yjs:update", {
-        update: update,   // re-send as base64
+        update:   update,
+        senderId: socket.id,
         userId,
       })
 

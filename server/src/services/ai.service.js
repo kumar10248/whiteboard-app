@@ -1,9 +1,4 @@
 // server/src/services/ai.service.js
-// FIXES:
-// 1. Prompt forces every shape to have a label — no empty labels allowed
-// 2. Prompt gives concrete coordinate examples so shapes form a real diagram
-// 3. Arrow positions use SHAPE_INDEX references which resolveShapes() converts
-// 4. Strict JSON-only extraction
 const nanoid = async (size = 12) => {
   const { nanoid } = await import("nanoid")
   return nanoid(size)
@@ -13,65 +8,88 @@ require("dotenv").config()
 const Groq = require("groq-sdk")
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
-/* ─── System prompt ────────────────────────────────────────────── */
-const SYSTEM_PROMPT = `You are a diagram layout engine. Output ONLY a valid JSON array. No text, no markdown, no explanation.
+// ── System prompt: forces proper diagram layout with arrows connecting shapes ──
+const SYSTEM_PROMPT = `You are a diagram layout engine. Output ONLY a valid JSON array. No text, no markdown, no backticks, no explanation.
 
-SHAPE SCHEMA (every field required):
+CRITICAL RULES:
+1. Every non-arrow shape MUST have a non-empty "label"
+2. Arrows MUST use "fromIndex" and "toIndex" integers (0-based index into this array, counting only non-arrow shapes)
+3. Use "ellipse" for Start/End nodes in flowcharts
+4. Shapes must be spaced so they don't overlap — minimum 40px gap between shapes
+5. Output starts with [ and ends with ]
+
+SHAPE SCHEMA (all fields required):
 {
-  "type":        "rect" | "ellipse" | "text" | "arrow",
+  "type":        "rect" | "ellipse" | "diamond" | "text",
   "x":           number,
   "y":           number,
-  "width":       number,
-  "height":      number,
-  "fill":        string,
-  "stroke":      string,
-  "strokeWidth": 1.5,
-  "label":       string,   ← REQUIRED, NEVER empty. Always put the node name here.
-  "fontSize":    13,
-  "fromId":      null,
-  "toId":        null
+  "width":       number (min 120 for rect, 100 for ellipse),
+  "height":      number (min 50),
+  "fill":        string (hex, use dark fills),
+  "stroke":      string (hex, bright),
+  "strokeWidth": 2,
+  "label":       string (REQUIRED for non-arrows, describe the node),
+  "fontSize":    14
 }
 
-ARROW SCHEMA:
-For arrows, use type "arrow" and set:
-  "fromIndex": number   ← index of source shape in this array (0-based)
-  "toIndex":   number   ← index of target shape in this array (0-based)
-The server replaces these with real IDs.
+ARROW SCHEMA (separate entries, placed AFTER all shapes):
+{
+  "type":       "arrow",
+  "fromIndex":  number (index of source shape in this array),
+  "toIndex":    number (index of target shape in this array),
+  "label":      "",
+  "stroke":     "#6c63ff",
+  "fill":       "#6c63ff",
+  "strokeWidth": 1.5
+}
 
-COLOR PALETTE (use these exact hex values):
-- Purple nodes: fill="#1a1535", stroke="#6c63ff"
-- Teal nodes:   fill="#0a2520", stroke="#22d3a0"
-- Red nodes:    fill="#2a0f0f", stroke="#f87171"
-- Blue nodes:   fill="#0a1a30", stroke="#3b82f6"
-- Yellow nodes: fill="#2a1f00", stroke="#fbbf24"
-- Arrow:        fill="#6c63ff", stroke="#6c63ff"
+LAYOUT RULES (STRICT):
 
-LAYOUT RULES:
-- Start at x=80, y=80
-- Each row: space shapes 200px apart horizontally
-- Each level: space 140px apart vertically
-- Keep all shapes within x=0..800, y=0..600
-- Arrows go AFTER all the shapes they connect
+FLOWCHARTS — always top-to-bottom vertical layout:
+- x=80 for all shapes (single column down the left)
+- y starts at 60, each next shape y += height + 100
+- Start/End = ellipse (width=140, height=50)
+- Process steps = rect (width=160, height=55)
+- Decisions = diamond (width=160, height=70), branch goes to x=300 same y
+- Arrows go straight down (fromIndex n → toIndex n+1), branch arrows go sideways
 
-EXAMPLE — "ERD for a blog" produces:
+ERDs — grid layout:
+- 3 columns: x=60, x=280, x=500
+- Rows spaced 140px apart, y starts at 60
+- All tables = rect (width=160, height=60)
+
+SYSTEM ARCHITECTURE — layered top-to-bottom:
+- Row 1 (clients): y=60
+- Row 2 (API/gateway): y=200
+- Row 3 (services): y=340, spaced 200px apart horizontally
+- Row 4 (databases): y=480
+
+COLOR RULES:
+- Purple nodes:  fill="#1a1535" stroke="#6c63ff"
+- Teal nodes:    fill="#0a2520" stroke="#22d3a0"
+- Red nodes:     fill="#2a0f0f" stroke="#f87171"
+- Blue nodes:    fill="#0a1a30" stroke="#3b82f6"
+- Yellow nodes:  fill="#2a1a00" stroke="#fbbf24"
+- Orange nodes:  fill="#2a1500" stroke="#fb923c"
+- Arrows:        stroke="#6c63ff" fill="#6c63ff"
+
+EXAMPLE — "ATM withdrawal flowchart" — follow this EXACT coordinate pattern:
 [
-  {"type":"rect","x":80,"y":80,"width":160,"height":60,"fill":"#1a1535","stroke":"#6c63ff","strokeWidth":1.5,"label":"User","fontSize":13,"fromId":null,"toId":null},
-  {"type":"rect","x":320,"y":80,"width":160,"height":60,"fill":"#0a2520","stroke":"#22d3a0","strokeWidth":1.5,"label":"Post","fontSize":13,"fromId":null,"toId":null},
-  {"type":"rect","x":560,"y":80,"width":160,"height":60,"fill":"#2a0f0f","stroke":"#f87171","strokeWidth":1.5,"label":"Comment","fontSize":13,"fromId":null,"toId":null},
-  {"type":"rect","x":320,"y":240,"width":160,"height":60,"fill":"#0a1a30","stroke":"#3b82f6","strokeWidth":1.5,"label":"Tag","fontSize":13,"fromId":null,"toId":null},
-  {"type":"arrow","x":240,"y":110,"width":80,"height":0,"fill":"#6c63ff","stroke":"#6c63ff","strokeWidth":1.5,"label":"","fontSize":13,"fromId":null,"toId":null,"fromIndex":0,"toIndex":1},
-  {"type":"arrow","x":480,"y":110,"width":80,"height":0,"fill":"#22d3a0","stroke":"#22d3a0","strokeWidth":1.5,"label":"","fontSize":13,"fromId":null,"toId":null,"fromIndex":1,"toIndex":2},
-  {"type":"arrow","x":400,"y":140,"width":0,"height":100,"fill":"#3b82f6","stroke":"#3b82f6","strokeWidth":1.5,"label":"","fontSize":13,"fromId":null,"toId":null,"fromIndex":1,"toIndex":3}
-]
+  {"type":"ellipse","x":80,"y":60,"width":140,"height":50,"fill":"#0a2520","stroke":"#22d3a0","strokeWidth":2,"label":"Start","fontSize":14},
+  {"type":"rect","x":80,"y":170,"width":160,"height":55,"fill":"#1a1535","stroke":"#6c63ff","strokeWidth":2,"label":"Insert Card","fontSize":14},
+  {"type":"rect","x":80,"y":285,"width":160,"height":55,"fill":"#1a1535","stroke":"#6c63ff","strokeWidth":2,"label":"Enter PIN","fontSize":14},
+  {"type":"diamond","x":80,"y":400,"width":160,"height":70,"fill":"#0a1a30","stroke":"#3b82f6","strokeWidth":2,"label":"PIN Valid?","fontSize":14},
+  {"type":"rect","x":300,"y":415,"width":150,"height":55,"fill":"#2a0f0f","stroke":"#f87171","strokeWidth":2,"label":"Invalid PIN","fontSize":14},
+  {"type":"rect","x":80,"y":530,"width":160,"height":55,"fill":"#1a1535","stroke":"#6c63ff","strokeWidth":2,"label":"Enter Amount","fontSize":14},
+  {"type":"ellipse","x":80,"y":645,"width":140,"height":50,"fill":"#2a0f0f","stroke":"#f87171","strokeWidth":2,"label":"End","fontSize":14},
+  {"type":"arrow","fromIndex":0,"toIndex":1,"label":"","stroke":"#22d3a0","fill":"#22d3a0","strokeWidth":1.5},
+  {"type":"arrow","fromIndex":1,"toIndex":2,"label":"","stroke":"#6c63ff","fill":"#6c63ff","strokeWidth":1.5},
+  {"type":"arrow","fromIndex":2,"toIndex":3,"label":"","stroke":"#6c63ff","fill":"#6c63ff","strokeWidth":1.5},
+  {"type":"arrow","fromIndex":3,"toIndex":4,"label":"No","stroke":"#f87171","fill":"#f87171","strokeWidth":1.5},
+  {"type":"arrow","fromIndex":3,"toIndex":5,"label":"Yes","stroke":"#22d3a0","fill":"#22d3a0","strokeWidth":1.5},
+  {"type":"arrow","fromIndex":5,"toIndex":6,"label":"","stroke":"#6c63ff","fill":"#6c63ff","strokeWidth":1.5}
+]`
 
-RULES:
-- ALWAYS include a meaningful label on every rect and ellipse — never ""
-- Labels must match the concept: "User", "Auth Service", "POST /api/login", etc.
-- Arrows can have empty label ""
-- Max 12 shapes total (including arrows)
-- Output ONLY the JSON array, starting with [ and ending with ]`
-
-/* ─── Extract JSON array from raw text ─────────────────────────── */
 function extractArray(text) {
   const start = text.indexOf("[")
   const end   = text.lastIndexOf("]")
@@ -79,7 +97,6 @@ function extractArray(text) {
   return text.slice(start, end + 1)
 }
 
-/* ─── Parse and clean AI output ────────────────────────────────── */
 function parseShapes(raw) {
   let cleaned = raw.replace(/```json/g, "").replace(/```/g, "").trim()
   const extracted = extractArray(cleaned)
@@ -87,122 +104,140 @@ function parseShapes(raw) {
   try {
     return JSON.parse(cleaned)
   } catch {
-    console.error("❌ Cannot parse AI output:\n", raw.slice(0, 300))
+    console.error("❌ AI parse failed. Raw:\n", raw.slice(0, 400))
     throw new Error("AI returned invalid JSON. Try a simpler prompt.")
   }
 }
 
-/* ─── Resolve SHAPE_INDEX references and assign nanoids ─────────── */
+// ── Build final shape list with real IDs and computed arrow positions ──
+// CRITICAL: Use sequential loop (not Promise.all) so nodeMap index order is guaranteed.
 async function resolveShapes(rawShapes, userId) {
-  // Separate nodes from arrows (process nodes first)
-  const nodes  = rawShapes.filter(s => s.type !== "arrow")
-  const arrows = rawShapes.filter(s => s.type === "arrow")
+  const nonArrows = rawShapes.filter(s => s.type !== "arrow")
+  const arrows    = rawShapes.filter(s => s.type === "arrow")
 
-  // Assign IDs to nodes
-  const nodeIds = []
-  const nodeShapes = await Promise.all(
-    nodes.map(async (s, idx) => {
+  // Assign IDs to all non-arrow shapes SEQUENTIALLY so nodeMap[i] = shape[i] always
+  const nodeMap = []  // index → { id, shape }
+  const nodes   = []
+
+  for (let idx = 0; idx < nonArrows.length; idx++) {
+    const s  = nonArrows[idx]
+    const id = await nanoid(10)
+    const shape = {
+      id,
+      type:        s.type || "rect",
+      x:           Number(s.x) || (80 + (idx % 3) * 220),
+      y:           Number(s.y) || (80 + Math.floor(idx / 3) * 150),
+      width:       Number(s.width)  || 150,
+      height:      Number(s.height) || 60,
+      fill:        s.fill   || "#1a1535",
+      stroke:      s.stroke || "#6c63ff",
+      strokeWidth: Number(s.strokeWidth) || 2,
+      label:       s.label  || `Node ${idx + 1}`,
+      fontSize:    Number(s.fontSize) || 14,
+      opacity:     1,
+      rotation:    0,
+      createdBy:   userId,
+      createdAt:   Date.now(),
+    }
+    nodeMap[idx] = { id, shape }  // explicit index assignment — never out of order
+    nodes.push(shape)
+  }
+
+  // Build arrows using fromIndex/toIndex → compute real pixel endpoints (sequential)
+  const arrowShapes = []
+  for (const s of arrows) {
       const id = await nanoid(10)
-      nodeIds.push(id)
-      return {
-        id,
-        type:        s.type        || "rect",
-        x:           Number(s.x)   || 80 + idx * 200,
-        y:           Number(s.y)   || 80,
-        width:       Number(s.width)  || 160,
-        height:      Number(s.height) || 60,
-        fill:        s.fill        || "#1a1535",
-        stroke:      s.stroke      || "#6c63ff",
-        strokeWidth: Number(s.strokeWidth) || 1.5,
-        label:       s.label       || `Node ${idx + 1}`,   // fallback label if AI forgot
-        fontSize:    Number(s.fontSize) || 13,
-        opacity:     1,
-        rotation:    0,
-        fromId:      null,
-        toId:        null,
-        createdBy:   userId,
-        createdAt:   Date.now(),
-      }
-    })
-  )
+      const fi = Number(s.fromIndex ?? s.from ?? 0)
+      const ti = Number(s.toIndex   ?? s.to   ?? 1)
 
-  // Build arrows using fromIndex/toIndex to look up nodeIds
-  const arrowShapes = await Promise.all(
-    arrows.map(async (s) => {
-      const id = await nanoid(10)
-      const fi = Number(s.fromIndex ?? s.fromId) || 0
-      const ti = Number(s.toIndex  ?? s.toId)   || 0
+      const src = nodeMap[fi]?.shape
+      const tgt = nodeMap[ti]?.shape
 
-      const sourceNode = nodeShapes[fi]
-      const targetNode = nodeShapes[ti]
-
-      // Compute actual pixel positions: center-right of source → center-left of target
+      // Compute edge-to-edge arrow endpoints.
+      // src.x/y is TOP-LEFT corner. Centers are (x + w/2, y + h/2).
       let x1, y1, x2, y2
-      if (sourceNode && targetNode) {
-        x1 = sourceNode.x + sourceNode.width         // right edge of source
-        y1 = sourceNode.y + sourceNode.height / 2    // vertical center
-        x2 = targetNode.x                            // left edge of target
-        y2 = targetNode.y + targetNode.height / 2    // vertical center
+      if (src && tgt) {
+        const srcCx = src.x + src.width  / 2
+        const srcCy = src.y + src.height / 2
+        const tgtCx = tgt.x + tgt.width  / 2
+        const tgtCy = tgt.y + tgt.height / 2
+
+        const dx = tgtCx - srcCx
+        const dy = tgtCy - srcCy
+
+        // Choose the dominant direction (horizontal vs vertical)
+        // to pick the best edge to exit/enter from
+        if (Math.abs(dx) >= Math.abs(dy)) {
+          // Horizontal dominant: exit right/left edge
+          if (dx >= 0) {
+            x1 = src.x + src.width   // exit right edge of source
+            x2 = tgt.x               // enter left edge of target
+          } else {
+            x1 = src.x               // exit left edge of source
+            x2 = tgt.x + tgt.width   // enter right edge of target
+          }
+          y1 = srcCy
+          y2 = tgtCy
+        } else {
+          // Vertical dominant: exit bottom/top edge
+          if (dy >= 0) {
+            y1 = src.y + src.height  // exit bottom edge of source
+            y2 = tgt.y               // enter top edge of target
+          } else {
+            y1 = src.y               // exit top edge of source
+            y2 = tgt.y + tgt.height  // enter bottom edge of target
+          }
+          x1 = srcCx
+          x2 = tgtCx
+        }
       } else {
-        // Fallback: use the x/y/width/height the AI gave
-        x1 = Number(s.x) || 100
-        y1 = Number(s.y) || 100
-        x2 = x1 + (Number(s.width) || 80)
-        y2 = y1 + (Number(s.height) || 0)
+        x1 = 100; y1 = 100; x2 = 200; y2 = 100
       }
 
-      return {
+      arrowShapes.push({
         id,
         type:        "arrow",
         x:           x1,
         y:           y1,
         width:       0,
         height:      0,
-        // points[] is how Konva Arrow renders — [startX,startY, endX,endY] in absolute coords
         points:      [x1, y1, x2, y2],
-        fill:        s.stroke  || "#6c63ff",
-        stroke:      s.stroke  || "#6c63ff",
+        fill:        s.stroke || "#6c63ff",
+        stroke:      s.stroke || "#6c63ff",
         strokeWidth: Number(s.strokeWidth) || 1.5,
-        label:       "",
+        label:       s.label || "",
         fontSize:    13,
         opacity:     1,
         rotation:    0,
-        fromId:      nodeIds[fi] || null,
-        toId:        nodeIds[ti] || null,
+        fromId:      nodeMap[fi]?.id || null,
+        toId:        nodeMap[ti]?.id || null,
         createdBy:   userId,
         createdAt:   Date.now(),
-      }
-    })
-  )
-
-  return [...nodeShapes, ...arrowShapes]
-}
-
-/* ─── Validate ──────────────────────────────────────────────────── */
-function validateShapes(shapes) {
-  const VALID = new Set(["rect", "ellipse", "text", "arrow"])
-  return shapes.filter(s => {
-    if (!VALID.has(s.type))         return false
-    if (typeof s.x !== "number")    return false
-    if (typeof s.y !== "number")    return false
-    if (s.x < 0 || s.y < 0)        return false
-    return true
-  })
-}
-
-/* ─── Main export ───────────────────────────────────────────────── */
-const generateDiagram = async (prompt, userId = "system") => {
-  if (!prompt || prompt.trim().length < 3) {
-    throw new Error("Prompt is too short.")
+      })
   }
+
+  return [...nodes, ...arrowShapes]
+}
+
+function validateShapes(shapes) {
+  const VALID = new Set(["rect", "ellipse", "text", "arrow", "diamond"])
+  return shapes.filter(s =>
+    VALID.has(s.type) &&
+    typeof s.x === "number" &&
+    typeof s.y === "number"
+  )
+}
+
+const generateDiagram = async (prompt, userId = "system") => {
+  if (!prompt || prompt.trim().length < 3) throw new Error("Prompt is too short.")
 
   const response = await groq.chat.completions.create({
     model:       "llama-3.3-70b-versatile",
-    temperature: 0.3,           // lower = more predictable layout
-    max_tokens:  1200,
+    temperature: 0.2,
+    max_tokens:  1400,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
-      { role: "user",   content: `Create a diagram for: ${prompt.trim()}` },
+      { role: "user",   content: `Create a diagram: ${prompt.trim()}` },
     ],
   })
 
@@ -212,10 +247,9 @@ const generateDiagram = async (prompt, userId = "system") => {
   try {
     const obj = JSON.parse(raw)
     parsed = Array.isArray(obj) ? obj
-      : obj?.shapes || obj?.nodes || obj?.elements || Object.values(obj || {})[0] || []
+      : obj?.shapes || obj?.nodes || Object.values(obj || {})[0] || []
   } catch {
-    try   { parsed = parseShapes(raw) }
-    catch { console.error("❌ All parse attempts failed"); parsed = [] }
+    try { parsed = parseShapes(raw) } catch { parsed = [] }
   }
 
   if (!Array.isArray(parsed)) parsed = []
@@ -223,10 +257,7 @@ const generateDiagram = async (prompt, userId = "system") => {
   const resolved  = await resolveShapes(parsed, userId)
   const validated = validateShapes(resolved)
 
-  if (validated.length === 0) {
-    throw new Error("AI generated no valid shapes. Try a different prompt.")
-  }
-
+  if (validated.length === 0) throw new Error("AI generated no valid shapes. Try a different prompt.")
   return validated
 }
 

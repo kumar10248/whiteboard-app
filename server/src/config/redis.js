@@ -14,7 +14,7 @@ let publisher  = null  // dedicated client — PUBLISH
 /* ── Create a connected Redis client ─────────────────────────────── */
 async function createRedisClient(name = "client") {
   const c = createClient({
-    url: process.env.REDIS_URL || "redis://localhost:6379",
+    url:"redis://localhost:6379",
     socket: {
       reconnectStrategy: (retries) => {
         if (retries > 10) {
@@ -36,6 +36,7 @@ async function createRedisClient(name = "client") {
   await c.connect()
   return c
 }
+
 
 /* ── Initialize all Redis clients ────────────────────────────────── */
 async function initRedis() {
