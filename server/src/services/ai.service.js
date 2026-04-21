@@ -265,4 +265,19 @@ const generateDiagram = async (prompt, userId = "system") => {
   return [...nodeShapes, ...arrowShapes]
 }
 
-module.exports = { generateDiagram }
+
+// ── AI describe selected shapes in plain English ──
+const generateDescription = async (summary, shapeCount) => {
+  const resp = await groq.chat.completions.create({
+    model: "llama-3.3-70b-versatile",
+    temperature: 0.4,
+    max_tokens: 200,
+    messages: [
+      { role: "system", content: "You are a diagram analyst. Given a list of shapes from a whiteboard, write 2-3 sentences explaining what the diagram represents in plain English. Be concise and insightful." },
+      { role: "user",   content: `${shapeCount} shapes: ${summary}` },
+    ],
+  })
+  return resp.choices[0]?.message?.content?.trim() || "Could not generate description."
+}
+
+module.exports = { generateDiagram, generateDescription }

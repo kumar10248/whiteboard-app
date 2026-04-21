@@ -206,6 +206,45 @@ module.exports = function registerBoardHandlers(io, socket) {
     }
   })
 
+
+  /* ── chat:message ─────────────────────────────────────────────
+     Live chat tied to the board. Message persisted in memory
+     per board session; broadcast to all room members.          */
+  socket.on("chat:message", ({ boardId, text }) => {
+    if (!boardId || !text?.trim()) return
+    const msg = {
+      id:     `m${Date.now()}${Math.random().toString(36).slice(2,6)}`,
+      userId,
+      name:   userName,
+      color:  userColor,
+      text:   text.trim().slice(0, 500),
+      ts:     Date.now(),
+    }
+    io.to(boardId).emit("chat:message", msg)
+  })
+
+  /* ── reaction:stamp ────────────────────────────────────────────
+     Emoji reaction broadcast to all in the room.
+     Client handles the floating animation.                     */
+  socket.on("reaction:stamp", ({ boardId, x, y, emoji }) => {
+    if (!boardId) return
+    // Broadcast to others (sender already shows it locally)
+    socket.to(boardId).emit("reaction:stamp", { x, y, emoji, userId })
+  })
+
+  /* ── ai:describe ───────────────────────────────────────────────
+     AI explains selected shapes in plain English.              */
+  socket.on("ai:describe", async ({ boardId, summary, count }) => {
+    if (!boardId || !summary) return
+    try {
+      const { generateDescription } = require("../../services/ai.service")
+      const text = await generateDescription(summary, count)
+      socket.emit("ai:describe_result", { text })
+    } catch (err) {
+      socket.emit("ai:describe_result", { text: "Could not describe — try again." })
+    }
+  })
+
   /* ── disconnect ── */
   socket.on("disconnect", async () => {
     if (!currentBoardId) return

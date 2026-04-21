@@ -7,36 +7,52 @@
 
 const { createClient } = require("redis")
 
-let client    = null   // main client — commands (GET, SET, PUBLISH)
-let subscriber = null  // dedicated client — SUBSCRIBE (can't mix with commands)
-let publisher  = null  // dedicated client — PUBLISH
+let client = null
+let subscriber = null
+let publisher = null
 
-/* ── Create a connected Redis client ─────────────────────────────── */
 async function createRedisClient(name = "client") {
+  const redisUrl = process.env.REDIS_URL || "redis://localhost:6379"
+
   const c = createClient({
-    url:"redis://localhost:6379",
-    socket: {
-      reconnectStrategy: (retries) => {
-        if (retries > 10) {
-          console.error(`[Redis] ${name}: Max reconnect attempts reached`)
-          return new Error("Max retries exceeded")
+    url: redisUrl,
+
+    // ✅ REQUIRED for Upstash (TLS)
+    socket: redisUrl.startsWith("rediss://")
+      ? {
+          tls: true,
+          rejectUnauthorized: false, // avoids TLS cert issues
+          reconnectStrategy: (retries) => {
+            if (retries > 10) {
+              console.error(`[Redis] ${name}: Max reconnect attempts reached`)
+              return new Error("Max retries exceeded")
+            }
+            const delay = Math.min(retries * 100, 3000)
+            console.log(`[Redis] ${name}: Reconnecting in ${delay}ms (attempt ${retries})`)
+            return delay
+          },
         }
-        const delay = Math.min(retries * 100, 3000)
-        console.log(`[Redis] ${name}: Reconnecting in ${delay}ms (attempt ${retries})`)
-        return delay
-      },
-    },
+      : {
+          reconnectStrategy: (retries) => {
+            if (retries > 10) {
+              console.error(`[Redis] ${name}: Max reconnect attempts reached`)
+              return new Error("Max retries exceeded")
+            }
+            const delay = Math.min(retries * 100, 3000)
+            console.log(`[Redis] ${name}: Reconnecting in ${delay}ms (attempt ${retries})`)
+            return delay
+          },
+        },
   })
 
-  c.on("error",       err => console.error(`[Redis] ${name} error:`, err.message))
-  c.on("connect",     ()  => console.log(`[Redis] ${name}: connected`))
-  c.on("reconnecting",()  => console.log(`[Redis] ${name}: reconnecting...`))
-  c.on("ready",       ()  => console.log(`[Redis] ${name}: ready`))
+  c.on("error", err => console.error(`[Redis] ${name} error:`, err.message))
+  c.on("connect", () => console.log(`[Redis] ${name}: connected`))
+  c.on("reconnecting", () => console.log(`[Redis] ${name}: reconnecting...`))
+  c.on("ready", () => console.log(`[Redis] ${name}: ready`))
 
   await c.connect()
   return c
 }
-
 
 /* ── Initialize all Redis clients ────────────────────────────────── */
 async function initRedis() {
