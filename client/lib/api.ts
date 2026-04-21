@@ -1,5 +1,5 @@
 // client/lib/api.ts
-const BASE = "http://localhost:5000/api/v1"
+const BASE = "https://whiteboard-app-ey8e.onrender.com/api/v1"
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null
