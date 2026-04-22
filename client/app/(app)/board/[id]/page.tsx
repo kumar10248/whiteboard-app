@@ -46,7 +46,10 @@ const TOOLS: { id:Tool;icon:string;label:string }[] = [
   {id:"parallelogram",icon:"▱",label:"Parallelogram"},{id:"text",icon:"T",label:"Text T"},
   {id:"pen",icon:"✏",label:"Pen P"},{id:"arrow",icon:"→",label:"Arrow A"},
 ]
-const PALETTE = ["#6c63ff","#22d3a0","#f87171","#fbbf24","#3b82f6","#c084fc","#fb923c","#e2e8f0","#64748b","#1a1535"]
+// Colors visible on BOTH light and dark backgrounds
+const PALETTE = ["#4f46e5","#059669","#dc2626","#d97706","#2563eb","#9333ea","#ea580c","#374151","#0f172a","#be185d"]
+// Light fills for shapes (visible on white canvas in light mode)
+const FILL_PALETTE = ["transparent","#ede9fe","#d1fae5","#fee2e2","#fef3c7","#dbeafe","#f3e8ff","#ffedd5","#f1f5f9","#1e293b","#fce7f3"]
 const REACTIONS = ["👍","❤️","🔥","💡","⚠️","✅","❓","🎉","😮","👀"]
 
 // ── Diagram templates ──
@@ -93,10 +96,10 @@ export default function BoardPage() {
   const [shapes, setShapes]           = useState<Shape[]>([])
   const [cursors, setCursors]         = useState<Cursor[]>([])
   const [tool, setTool]               = useState<Tool>("rect")
-  const [strokeColor, setStrokeColor] = useState("#6c63ff")
-  const [fillColor, setFillColor]     = useState("transparent")
-  const [strokeW, setStrokeW]         = useState(2)
-  const [fontSize, setFontSize]       = useState(14)
+  const [strokeColor, setStrokeColor] = useState("#4f46e5")
+  const [fillColor, setFillColor]     = useState("#ede9fe")
+  const [strokeW, setStrokeW]         = useState(2.5)
+  const [fontSize, setFontSize]       = useState(16)
   const [fontStyle, setFontStyle]     = useState<"normal"|"bold"|"italic">("normal")
   const [selected, setSelected]       = useState<string[]>([])
 
@@ -106,7 +109,7 @@ export default function BoardPage() {
   const [myInfo, setMyInfo]           = useState<{id:string;name:string;color:string}|null>(null)
   const [connected, setConnected]     = useState(false)
   const [statusMsg, setStatusMsg]     = useState("")
-  const [darkMode, setDarkMode]       = useState(true)
+  const [darkMode, setDarkMode]       = useState(false)
   const [mounted, setMounted]         = useState(false)
 
   // AI
@@ -169,13 +172,18 @@ export default function BoardPage() {
     const socket = connectSocket()
     setConnected(socket.connected)
 
-    const onConnect = () => { setConnected(true); socket.emit("board:join",{boardId}) }
+    const onConnect = () => {
+      setConnected(true)
+      setStatusMsg("Joining board...")
+      socket.emit("board:join",{boardId})
+    }
     socket.on("connect",    onConnect)
-    socket.on("disconnect", ()=>setConnected(false))
+    socket.on("disconnect", ()=>{ setConnected(false); setStatusMsg("Reconnecting...") })
 
     socket.on("board:state", ({shapes:s,boardTitle:t}:any) => {
       if (t) setBoardTitle(t)
       setShapes(Array.isArray(s)?s:[])
+      setStatusMsg("")   // clear "Joining..." message once loaded
     })
 
     socket.on("shape:upsert", ({shape}:any) => {
@@ -219,7 +227,10 @@ export default function BoardPage() {
     socket.on("ai:describe_result",({text}:any)=>{setAiDescribe(text);setAiDescLoading(false)})
     socket.on("board:snapshot_saved",()=>{setStatusMsg("✓ Saved");setTimeout(()=>setStatusMsg(""),2000)})
 
-    if (socket.connected) socket.emit("board:join",{boardId})
+    if (socket.connected) {
+      setStatusMsg("Joining board...")
+      socket.emit("board:join",{boardId})
+    }
 
     return () => {
       socket.off("connect");socket.off("disconnect")
@@ -229,7 +240,7 @@ export default function BoardPage() {
       socket.off("ai:result");socket.off("ai:placed");socket.off("ai:error");socket.off("ai:describe_result")
       socket.off("board:snapshot_saved")
       socket.emit("board:leave",{boardId})
-      disconnectSocket()
+      // Do NOT disconnect — keep the socket alive for fast next-board join
     }
   }, [ready,boardId])
 
@@ -456,7 +467,7 @@ export default function BoardPage() {
         <div style={{display:"flex",flex:1,overflow:"hidden"}}>
 
           {/* ── LEFT TOOLBAR ── */}
-          <aside className="sidebar" style={{background:surface,borderColor:border}}>
+          <aside className="sidebar" style={{background:surface,borderColor:border,color:text}}>
             {TOOLS.map(t=>(
               <button key={t.id} className={`tool-btn${tool===t.id&&!reactionMode?" active":""}`}
                 onClick={()=>{setTool(t.id);setReactionMode(false)}} title={t.label}>{t.icon}</button>
@@ -469,17 +480,20 @@ export default function BoardPage() {
             ))}
             <div className="divider" style={{background:border}} />
             <div style={{fontSize:9,color:muted,fontFamily:"var(--mono)",marginBottom:1}}>FILL</div>
-            <button className="color-dot" onClick={()=>setFillColor("transparent")}
-              style={{background:"transparent",border:"2px dashed #6c63ff",outline:fillColor==="transparent"?"2px solid #fff":"2px solid transparent",outlineOffset:2}} />
-            {PALETTE.map(c=>(
-              <button key={`f${c}`} className="color-dot" onClick={()=>setFillColor(c)}
-                style={{background:c,outline:fillColor===c?"2px solid #fff":"2px solid transparent",outlineOffset:2}} />
+            {FILL_PALETTE.map(c=>(
+              <button key={`f${c}`} className="color-dot" onClick={()=>setFillColor(c)} title={c}
+                style={{
+                  background: c==="transparent"?(dm?"#1a1a22":"#f0f0f0"):c,
+                  border: c==="transparent"?"2px dashed #4f46e5":"1px solid rgba(0,0,0,.2)",
+                  outline: fillColor===c?"2px solid #4f46e5":"2px solid transparent",
+                  outlineOffset:2
+                }} />
             ))}
             <div className="divider" style={{background:border}} />
             {[1,2,3,4].map(w=>(
               <button key={w} onClick={()=>setStrokeW(w)} title={`${w}px`}
-                style={{width:28,height:20,background:"transparent",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                <div style={{width:18,height:w,background:strokeW===w?"#6c63ff":muted,borderRadius:1}} />
+                style={{width:32,height:22,background:strokeW===w?"rgba(79,70,229,.15)":"transparent",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",borderRadius:6}}>
+                <div style={{width:20,height:w+1,background:strokeW===w?"#4f46e5":muted,borderRadius:2}} />
               </button>
             ))}
           </aside>
@@ -818,13 +832,13 @@ button{cursor:pointer;font-family:var(--sans)}
 .topbar-right{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
 .avatar{width:24px;height:24px;border-radius:50%;border:2px solid transparent;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#fff;font-family:var(--mono);flex-shrink:0}
 .tb-btn{background:transparent;border:1px solid;padding:4px 10px;border-radius:var(--r);font-size:11px;transition:all .15s;white-space:nowrap;flex-shrink:0}
-.tb-btn.active{border-color:rgba(108,99,255,.5);color:#6c63ff;background:rgba(108,99,255,.1)}
+.tb-btn.active{border-color:rgba(79,70,229,.5)!important;color:#4f46e5!important;background:rgba(79,70,229,.1)!important}
 .tb-btn.accent{background:#6c63ff;border:none;color:#fff;font-weight:700}
 .sidebar{width:50px;border-right:1px solid;display:flex;flex-direction:column;align-items:center;padding:8px 0;gap:3px;flex-shrink:0;z-index:5;overflow-y:auto}
-.tool-btn{width:34px;height:34px;border-radius:var(--r);background:transparent;border:1px solid transparent;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0}
-.tool-btn.active{background:rgba(108,99,255,.15);border-color:rgba(108,99,255,.5);color:#6c63ff}
+.tool-btn{width:34px;height:34px;border-radius:var(--r);background:transparent;border:1px solid transparent;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0;color:inherit}
+.tool-btn.active{background:rgba(79,70,229,.15);border-color:rgba(79,70,229,.5);color:#4f46e5}
 .color-dot{width:20px;height:20px;border-radius:50%;border:none;cursor:pointer;flex-shrink:0;transition:transform .15s}
-.color-dot:hover{transform:scale(1.15)}
+.color-dot:hover{transform:scale(1.18);z-index:1;position:relative}
 .divider{width:28px;height:1px;margin:3px 0;flex-shrink:0}
 .props-panel{width:210px;border-left:1px solid;display:flex;flex-direction:column;flex-shrink:0}
 .side-panel{width:280px;border-left:1px solid;display:flex;flex-direction:column;flex-shrink:0;animation:slideR .25s cubic-bezier(.22,1,.36,1)}

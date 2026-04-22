@@ -69,7 +69,7 @@ router.get("/:id", optionalAuth, async (req, res) => {
       : { _id: req.params.id, isPublic: true }
 
     const board = await Board.findOne(query)
-      .select("-ydocState -snapshots")   // don't send binary data over REST
+      .select("-snapshots")   // snapshots now in separate collection
       .lean()
 
     if (!board) return res.status(404).json({ msg: "Board not found" })
@@ -166,23 +166,31 @@ router.post("/:id/members", verifyJWT, async (req, res) => {
 /* ── GET /api/v1/boards/:id/snapshots — list version history ───── */
 router.get("/:id/snapshots", verifyJWT, async (req, res) => {
   try {
+    // Verify access
     const board = await Board.findOne({
-      _id:     req.params.id,
-      $or: [{ ownerId: req.user.id }, { members: req.user.id }],
-    }).select("snapshots")
+      _id:  req.params.id,
+      $or:  [{ ownerId: req.user.id }, { members: req.user.id }],
+    }, { _id: 1 }).lean()
 
     if (!board) return res.status(404).json({ msg: "Board not found" })
 
-    // Send metadata only — never send the binary ydocState over REST
-    const snapshots = board.snapshots.map((s, i) => ({
+    // Read from new BoardSnapshot collection (NOT Board.snapshots[] - that field was removed)
+    const { Snapshot } = require("../services/crdt.service")
+    const snaps = await Snapshot
+      .find({ boardId: req.params.id })
+      .sort({ savedAt: -1 })
+      .select("label savedAt")
+      .lean()
+
+    const snapshots = snaps.map((s, i) => ({
       index:   i,
-      label:   s.label,
+      label:   s.label || "Auto-save",
       savedAt: s.savedAt,
     }))
 
     res.json({ snapshots })
   } catch (err) {
-    console.error("list snapshots error:", err)
+    console.error("list snapshots error:", err.message)
     res.status(500).json({ msg: "Failed to fetch snapshots" })
   }
 })

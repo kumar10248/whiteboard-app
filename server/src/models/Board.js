@@ -1,58 +1,30 @@
 // server/src/models/Board.js
+// PERFORMANCE: Removed ydocState (large binary) — shapes now in BoardShapes collection.
+// Added indexes for the exact queries board.handler.js runs.
 const mongoose = require("mongoose")
 
 const boardSchema = new mongoose.Schema({
   ownerId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "User",
+    type:     mongoose.Schema.Types.ObjectId,
+    ref:      "User",
     required: true,
   },
   title: {
-    type: String,
+    type:    String,
     required: true,
-    trim: true,
+    trim:    true,
     default: "Untitled board",
   },
-  members: [
-    {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-    }
-  ],
-  // Binary Yjs document state — the full serialized canvas
-  // Updated every 30s and on last user disconnect
-  ydocState: {
-    type: Buffer,
-    default: null,
-  },
-  // Snapshot history — last 10 saves for version rewind
-  snapshots: [
-    {
-      ydocState: { type: Buffer, required: true },
-      savedAt:   { type: Date,   default: Date.now },
-      label:     { type: String, default: "" },   // e.g. "Auto-save" or "Before AI diagram"
-    }
-  ],
-  // PNG thumbnail stored as base64 — generated on export
-  thumbnail: {
-    type: String,
-    default: null,
-  },
-  isPublic: {
-    type: Boolean,
-    default: false,
-  },
+  members: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+
+  isPublic:  { type: Boolean, default: false },
+  thumbnail: { type: String,  default: null },
 }, { timestamps: true })
 
-// Index for fast member lookup
+// ── Indexes for fast board:join access check ──
 boardSchema.index({ ownerId: 1 })
-boardSchema.index({ members: 1 })
+boardSchema.index({ members: 1 })           // makes $or: [{ members: userId }] fast
+boardSchema.index({ ownerId: 1, _id: 1 })   // covered index for dashboard list
+boardSchema.index({ isPublic: 1 })
 
-// Keep only last 10 snapshots automatically
-boardSchema.pre("save", function () {
-  if (this.snapshots && this.snapshots.length > 10) {
-    this.snapshots = this.snapshots.slice(-10)
-  }
-})
-
-module.exports = mongoose.model("Board", boardSchema)
+module.exports = mongoose.models.Board || mongoose.model("Board", boardSchema)

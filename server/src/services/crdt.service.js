@@ -1,78 +1,141 @@
 // server/src/services/crdt.service.js
-const Y     = require("yjs")
-const Board = require("../models/Board")
+// PERFORMANCE REWRITE:
+// Previous approach stored shapes as Yjs binary (ydocState Buffer).
+// Loading that binary blob, deserializing it, and re-serializing it
+// on every join was the primary cause of 4-5 minute load times.
+//
+// New approach: shapes are stored as plain JSON in a separate
+// BoardShapes collection. In-memory Map for active boards.
+// Board join = one indexed query. No binary serialization.
 
-// In-memory map: boardId → Y.Doc
-const docs = new Map()
+const mongoose = require("mongoose")
 
-// Export so board.handler.js can read shapes directly without
-// going through an async helper on every shape:upsert event
-const getDocs = () => docs
+// ── Separate shapes collection (fast indexed access) ──
+const ShapeSchema = new mongoose.Schema({
+  boardId: { type: String, required: true, index: true },
+  shapes:  { type: mongoose.Schema.Types.Mixed, default: {} }, // { id: shapeObj }
+}, { versionKey: false })
 
-/* ── Get (or load) a Y.Doc for a board ── */
-const getDoc = async (boardId) => {
-  if (docs.has(boardId)) return docs.get(boardId)
+const BoardShapes = mongoose.models.BoardShape || mongoose.model("BoardShape", ShapeSchema)
 
-  const ydoc = new Y.Doc()
-  const board = await Board.findById(boardId).select("ydocState")
-  if (board?.ydocState?.length) {
-    try { Y.applyUpdate(ydoc, board.ydocState) }
-    catch (e) { console.warn(`[crdt] load failed board=${boardId}:`, e.message) }
-  }
-  docs.set(boardId, ydoc)
-  return ydoc
-}
+// In-memory shape store: boardId → Map<shapeId, shape>
+// This is the hot path — all reads/writes during a session go here.
+// MongoDB is only written to on auto-save (every 30s) and disconnect.
+const mem = new Map()    // boardId → Map<id, shape>
+const dirty = new Set()  // boardIds that need saving
 
-/* ── Save Yjs state to MongoDB ──
-   SIZE FIX: max 3 snapshots, each update independent to avoid 16 MB limit. */
-const saveSnapshot = async (boardId, label = "Auto-save") => {
-  const ydoc = docs.get(boardId)
-  if (!ydoc) return
+// ── Load board into memory (called once on first join) ──
+const loadBoard = async (boardId) => {
+  if (mem.has(boardId)) return mem.get(boardId)
 
-  const buf    = Buffer.from(Y.encodeStateAsUpdate(ydoc))
-  const sizeMB = buf.length / (1024 * 1024)
-
+  let shapes = new Map()
   try {
-    // Always update the main ydocState field
-    await Board.findByIdAndUpdate(boardId, {
-      $set: { ydocState: buf, updatedAt: new Date() },
-    })
-
-    // Only keep a snapshot entry if state is small enough (<2 MB)
-    if (sizeMB < 2) {
-      const board = await Board.findById(boardId).select("snapshots")
-      if (board) {
-        // Remove oldest if we already have 3
-        if (board.snapshots.length >= 3) {
-          await Board.findByIdAndUpdate(boardId, {
-            $pull: { snapshots: { _id: board.snapshots[0]._id } },
-          })
-        }
-        await Board.findByIdAndUpdate(boardId, {
-          $push: { snapshots: { ydocState: buf, savedAt: new Date(), label } },
-        })
-      }
+    const doc = await BoardShapes.findOne({ boardId }).lean()
+    if (doc?.shapes && typeof doc.shapes === "object") {
+      // Convert plain object back to Map
+      shapes = new Map(Object.entries(doc.shapes))
     }
   } catch (e) {
-    console.error(`[crdt] saveSnapshot board=${boardId}:`, e.message)
+    console.warn(`[crdt] load board ${boardId}:`, e.message)
+  }
+  mem.set(boardId, shapes)
+  console.log(`[crdt] loaded board ${boardId} — ${shapes.size} shapes`)
+  return shapes
+}
+
+// ── getDoc kept for backward compatibility (board.handler uses it) ──
+const getDoc = async (boardId) => {
+  await loadBoard(boardId)
+  return { boardId }   // dummy — board.handler uses getDocs() to read shapes
+}
+
+// ── getDocs: board.handler reads shapes directly ──
+// Returns a proxy that makes board.handler's getAllShapesJSON work
+const getDocs = () => ({
+  get: (boardId) => {
+    if (!mem.has(boardId)) return null
+    return {
+      getMap: () => ({
+        values: () => mem.get(boardId).values(),
+        set:    (id, shape) => { mem.get(boardId)?.set(id, shape); dirty.add(boardId) },
+        delete: (id) => { mem.get(boardId)?.delete(id); dirty.add(boardId) },
+        size:   mem.get(boardId)?.size ?? 0,
+      }),
+      transact: (fn) => fn(),
+    }
+  },
+  has: (boardId) => mem.has(boardId),
+})
+
+// ── Save dirty boards to MongoDB ──
+const flushDirty = async () => {
+  if (dirty.size === 0) return
+  const toFlush = Array.from(dirty)
+  dirty.clear()
+  await Promise.all(toFlush.map(async (boardId) => {
+    const shapes = mem.get(boardId)
+    if (!shapes) return
+    try {
+      const obj = Object.fromEntries(shapes.entries())
+      await BoardShapes.findOneAndUpdate(
+        { boardId },
+        { $set: { shapes: obj } },
+        { upsert: true, new: true }
+      )
+    } catch (e) {
+      console.error(`[crdt] flush ${boardId}:`, e.message)
+      dirty.add(boardId)   // retry next cycle
+    }
+  }))
+}
+
+// ── Snapshot = save current shapes with a label ──
+// Snapshots stored in a lightweight collection (no binary blobs)
+const SnapshotSchema = new mongoose.Schema({
+  boardId:   { type: String, required: true, index: true },
+  label:     { type: String, default: "Auto-save" },
+  savedAt:   { type: Date,   default: Date.now },
+  shapes:    { type: mongoose.Schema.Types.Mixed, default: {} },
+}, { versionKey: false })
+
+const Snapshot = mongoose.models.BoardSnapshot || mongoose.model("BoardSnapshot", SnapshotSchema)
+
+const saveSnapshot = async (boardId, label = "Auto-save") => {
+  const shapes = mem.get(boardId)
+  if (!shapes) return
+  try {
+    // Flush main shapes first
+    await flushDirty()
+    // Keep max 5 snapshots per board
+    const count = await Snapshot.countDocuments({ boardId })
+    if (count >= 5) {
+      const oldest = await Snapshot.findOne({ boardId }).sort({ savedAt: 1 })
+      if (oldest) await Snapshot.deleteOne({ _id: oldest._id })
+    }
+    await Snapshot.create({ boardId, label, savedAt: new Date(), shapes: Object.fromEntries(shapes.entries()) })
+  } catch (e) {
+    console.error(`[crdt] saveSnapshot ${boardId}:`, e.message)
   }
 }
 
-/* ── Restore a snapshot and replace the live doc ── */
 const restoreSnapshot = async (boardId, snapshotIndex) => {
-  const board = await Board.findById(boardId).select("snapshots")
-  const snap  = board?.snapshots?.[snapshotIndex]
+  const snaps = await Snapshot.find({ boardId }).sort({ savedAt: -1 })
+  const snap  = snaps[snapshotIndex]
   if (!snap) throw new Error(`Snapshot ${snapshotIndex} not found`)
-
-  const freshDoc = new Y.Doc()
-  Y.applyUpdate(freshDoc, snap.ydocState)
-  docs.set(boardId, freshDoc)   // replace live doc
+  const restored = new Map(Object.entries(snap.shapes || {}))
+  mem.set(boardId, restored)
+  dirty.add(boardId)
+  await flushDirty()
 }
 
-/* ── Clean up when last user leaves ── */
 const releaseDoc = async (boardId) => {
-  await saveSnapshot(boardId, "Auto-save on disconnect")
-  docs.delete(boardId)
+  dirty.add(boardId)
+  await flushDirty()
+  mem.delete(boardId)
+  console.log(`[crdt] released board ${boardId}`)
 }
 
-module.exports = { getDocs, getDoc, saveSnapshot, restoreSnapshot, releaseDoc }
+// ── Start auto-flush every 15s (replaces per-board 30s intervals) ──
+setInterval(flushDirty, 15_000)
+
+module.exports = { getDocs, getDoc, loadBoard, saveSnapshot, restoreSnapshot, releaseDoc, BoardShapes, Snapshot }

@@ -230,12 +230,49 @@ export default function DashboardPage() {
 
 function Loader() {
   return (
-    <div style={{ minHeight: "100vh", background: "#0c0c10", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12 }}>
-      <style>{`@keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}`}</style>
-      <div style={{ display: "flex", gap: 6 }}>
-        {[0, 1, 2].map(i => <span key={i} style={{ width: 7, height: 7, borderRadius: "50%", background: "#6c63ff", animation: `pulse 1.2s ease-in-out ${i * .18}s infinite` }} />)}
+    <div style={{ minHeight: "100vh", background: "#0c0c10", display: "flex", flexDirection: "column" }}>
+      <style>{`
+        @keyframes shimmer {
+          0% { background-position: -400px 0 }
+          100% { background-position: 400px 0 }
+        }
+        .skel {
+          background: linear-gradient(90deg, #131318 25%, #1a1a22 50%, #131318 75%);
+          background-size: 400px 100%;
+          animation: shimmer 1.4s ease-in-out infinite;
+          border-radius: 8px;
+        }
+      `}</style>
+      {/* Nav skeleton */}
+      <div style={{ height: 56, borderBottom: "1px solid #22222e", background: "#131318", display: "flex", alignItems: "center", padding: "0 28px", gap: 12 }}>
+        <div className="skel" style={{ width: 120, height: 16 }} />
+        <div style={{ marginLeft: "auto", display: "flex", gap: 12 }}>
+          <div className="skel" style={{ width: 80, height: 16, borderRadius: 20 }} />
+          <div className="skel" style={{ width: 32, height: 32, borderRadius: "50%" }} />
+        </div>
       </div>
-      <p style={{ color: "#58587a", fontFamily: "monospace", fontSize: 12 }}>Loading workspace...</p>
+      {/* Content skeleton */}
+      <div style={{ maxWidth: 1000, margin: "36px auto", padding: "0 28px", width: "100%" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28 }}>
+          <div>
+            <div className="skel" style={{ width: 140, height: 24, marginBottom: 8 }} />
+            <div className="skel" style={{ width: 80, height: 14 }} />
+          </div>
+          <div className="skel" style={{ width: 120, height: 36, borderRadius: 10 }} />
+        </div>
+        {/* Board card skeletons */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))", gap: 16 }}>
+          {[0,1,2,3,4,5].map(i => (
+            <div key={i} style={{ borderRadius: 14, overflow: "hidden", border: "1px solid #22222e", animationDelay: `${i*0.05}s` }}>
+              <div className="skel" style={{ height: 120, borderRadius: 0 }} />
+              <div style={{ padding: "14px 16px", background: "#131318" }}>
+                <div className="skel" style={{ width: "60%", height: 14, marginBottom: 8 }} />
+                <div className="skel" style={{ width: "40%", height: 11 }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }

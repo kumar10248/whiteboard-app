@@ -114,8 +114,8 @@ export default function KonvaBoard({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [size,  setSize ] = useState({ w: 0, h: 0 })
-  const [scale, setScale] = useState(1)
-  const [pos,   setPos  ] = useState({ x: 0, y: 0 })
+  const [scale, setScale] = useState(1.4)
+  const [pos,   setPos  ] = useState({ x: 40, y: 40 })
 
   const isPanning    = useRef(false)
   const panStart     = useRef({ x: 0, y: 0 })
@@ -187,7 +187,7 @@ export default function KonvaBoard({
   const onWheel = useCallback((e: any) => {
     e.evt.preventDefault()
     const stage = stageRef.current; if (!stage) return
-    const factor = 1.08
+    const factor = 1.05   // smoother zoom steps
     const ptr = stage.getPointerPosition(); if (!ptr) return
     const ns = e.evt.deltaY < 0 ? Math.min(scale*factor,8) : Math.max(scale/factor,0.1)
     const anchor = { x:(ptr.x-pos.x)/scale, y:(ptr.y-pos.y)/scale }
@@ -298,8 +298,9 @@ export default function KonvaBoard({
   }
 
   const lbl = (s: Shape) => !s.label ? null : (
-    <Text text={s.label} fontSize={s.fontSize||13} fontStyle={s.fontStyle||"normal"}
-      fill={s.textColor||"#eaeaf4"} width={s.width} height={s.height}
+    <Text text={s.label} fontSize={s.fontSize||15} fontStyle={s.fontStyle||"normal"}
+      fill={s.textColor||(darkMode?"#f1f5f9":"#1e293b")}
+      width={s.width} height={s.height}
       align="center" verticalAlign="middle" listening={false} wrap="word" />
   )
 
@@ -308,7 +309,7 @@ export default function KonvaBoard({
   return (
     <div ref={containerRef} style={{
       flex:1, position:"relative", overflow:"hidden", background: bg,
-      cursor: spaceHeld.current?(isPanning.current?"grabbing":"grab"):tool==="select"?"default":"crosshair",
+      cursor: spaceHeld.current?(isPanning.current?"grabbing":"grab"):(tool as string)==="reaction"?"cell":tool==="select"?"default":"crosshair",
     }}>
       {/* Grid */}
       <div style={{ position:"absolute",inset:0,pointerEvents:"none",
@@ -333,6 +334,12 @@ export default function KonvaBoard({
         pointerEvents:"none" }}>
         {Math.round(scale*100)}% · scroll=zoom · space+drag=pan
       </div>
+
+      {/* CSS will-change for smoother zoom */}
+      <style>{`
+        .konva-stage-container canvas { will-change: transform; }
+        .konva-stage-container { image-rendering: pixelated; }
+      `}</style>
 
       {/* Zoom buttons */}
       <div style={{ position:"absolute",bottom:50,right:14,zIndex:10,display:"flex",flexDirection:"column",gap:5 }}>
@@ -474,9 +481,9 @@ export default function KonvaBoard({
 
             {/* Snap guide lines */}
             {snapLines.map((ln,i) => ln.axis==="x" ? (
-              <Line key={i} points={[ln.pos,-5000,ln.pos,5000]} stroke="#ff3cac" strokeWidth={1} dash={[4,4]} listening={false} />
+              <Line key={i} points={[ln.pos,-9999,ln.pos,9999]} stroke="#e11d48" strokeWidth={1.5} dash={[6,3]} listening={false} />
             ) : (
-              <Line key={i} points={[-5000,ln.pos,5000,ln.pos]} stroke="#ff3cac" strokeWidth={1} dash={[4,4]} listening={false} />
+              <Line key={i} points={[-9999,ln.pos,9999,ln.pos]} stroke="#e11d48" strokeWidth={1.5} dash={[6,3]} listening={false} />
             ))}
 
             {/* Rubber-band selection */}
