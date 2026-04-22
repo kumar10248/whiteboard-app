@@ -209,13 +209,23 @@ module.exports = function registerBoardHandlers(io, socket) {
     } catch { socket.emit("error", { msg: "Failed to save" }) }
   })
 
-  /* ── board:rewind ── */
+  /* ── board:rewind ─────────────────────────────────────────────
+     FIX: After logout+login, mem may not have this board loaded
+     (releaseDoc deleted it on disconnect). Call loadBoard first
+     so restoreSnapshot can write into a valid mem entry, and
+     getShapesArray can read it back.                           */
   socket.on("board:rewind", async ({ boardId, snapshotIndex }) => {
     try {
+      // Ensure board is in memory before restoring into it
+      await loadBoard(boardId)
       await restoreSnapshot(boardId, snapshotIndex)
       const shapes = getShapesArray(boardId)
+      console.log(`[board:rewind] board=${boardId} index=${snapshotIndex} restored=${shapes.length} shapes`)
       io.to(boardId).emit("board:restore", { shapes })
-    } catch (err) { socket.emit("error", { msg: err.message || "Failed to rewind" }) }
+    } catch (err) {
+      console.error("board:rewind error:", err.message)
+      socket.emit("error", { msg: err.message || "Failed to rewind" })
+    }
   })
 
   /* ── disconnect ── */

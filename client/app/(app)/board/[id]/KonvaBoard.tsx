@@ -117,6 +117,11 @@ export default function KonvaBoard({
   const [size,  setSize ] = useState({ w: 0, h: 0 })
   const [scale, setScale] = useState(1.4)
   const [pos,   setPos  ] = useState({ x: 40, y: 40 })
+  // Refs keep current values accessible in callbacks without stale closures
+  const scaleRef = useRef(1.4)
+  const posRef   = useRef({ x: 40, y: 40 })
+  useEffect(() => { scaleRef.current = scale }, [scale])
+  useEffect(() => { posRef.current   = pos   }, [pos])
 
   // Pan state
   const isPanning  = useRef(false)
@@ -220,20 +225,23 @@ export default function KonvaBoard({
     const ptr   = stage.getPointerPosition(); if (!ptr) return
 
     if (e.evt.ctrlKey || e.evt.metaKey) {
-      // Pinch-to-zoom or Ctrl+scroll = zoom
-      const factor = e.evt.deltaY < 0 ? 1.05 : (1 / 1.05)
-      const ns = Math.min(8, Math.max(0.1, scale * factor))
-      const anchor = { x: (ptr.x - pos.x) / scale, y: (ptr.y - pos.y) / scale }
+      // Ctrl/Cmd + scroll = zoom toward cursor
+      const oldScale = scaleRef.current
+      const oldPos   = posRef.current
+      const factor   = e.evt.deltaY < 0 ? 1.06 : (1 / 1.06)
+      const ns       = Math.min(8, Math.max(0.1, oldScale * factor))
+      const anchor   = { x: (ptr.x - oldPos.x) / oldScale, y: (ptr.y - oldPos.y) / oldScale }
+      const newPos   = { x: ptr.x - anchor.x * ns, y: ptr.y - anchor.y * ns }
       setScale(ns)
-      setPos({ x: ptr.x - anchor.x * ns, y: ptr.y - anchor.y * ns })
+      setPos(newPos)
     } else {
-      // Plain scroll = pan (trackpad-native feel)
+      // Plain scroll = pan (natural trackpad two-finger scroll)
       setPos(p => ({
         x: p.x - e.evt.deltaX,
         y: p.y - e.evt.deltaY,
       }))
     }
-  }, [scale, pos])
+  }, [])   // no deps — uses refs only
 
   // ── Mouse down ──
   const onMouseDown = useCallback((e: any) => {
@@ -483,9 +491,23 @@ export default function KonvaBoard({
       {/* Zoom buttons */}
       <div style={{ position: "absolute", bottom: 56, right: 14, zIndex: 10, display: "flex", flexDirection: "column", gap: 4 }}>
         {[
-          { l: "+", title: "Zoom in",  a: () => { const ns=Math.min(8,scale*1.15); const cx=size.w/2, cy=size.h/2; setScale(ns); setPos(p=>({ x:cx-(cx-p.x)/scale*ns, y:cy-(cy-p.y)/scale*ns })) } },
-          { l: "−", title: "Zoom out", a: () => { const ns=Math.max(0.1,scale/1.15); const cx=size.w/2, cy=size.h/2; setScale(ns); setPos(p=>({ x:cx-(cx-p.x)/scale*ns, y:cy-(cy-p.y)/scale*ns })) } },
-          { l: "⊡", title: "Fit to screen (reset)", a: () => { setScale(1.4); setPos({ x: 40, y: 40 }) } },
+          { l: "+", title: "Zoom in  (Ctrl++)",  a: () => {
+            const oldScale = scaleRef.current
+            const ns = Math.min(8, oldScale * 1.2)
+            const cx = size.w / 2, cy = size.h / 2
+            const p  = posRef.current
+            setScale(ns)
+            setPos({ x: cx - (cx - p.x) * (ns / oldScale), y: cy - (cy - p.y) * (ns / oldScale) })
+          }},
+          { l: "−", title: "Zoom out (Ctrl+-)", a: () => {
+            const oldScale = scaleRef.current
+            const ns = Math.max(0.1, oldScale / 1.2)
+            const cx = size.w / 2, cy = size.h / 2
+            const p  = posRef.current
+            setScale(ns)
+            setPos({ x: cx - (cx - p.x) * (ns / oldScale), y: cy - (cy - p.y) * (ns / oldScale) })
+          }},
+          { l: "⊡", title: "Reset zoom", a: () => { setScale(1.4); setPos({ x: 40, y: 40 }) } },
         ].map(b => (
           <button key={b.l} onClick={b.a} title={b.title} style={{
             width: 34, height: 34, borderRadius: 10,
