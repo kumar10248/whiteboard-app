@@ -102,30 +102,49 @@ const Snapshot = mongoose.models.BoardSnapshot || mongoose.model("BoardSnapshot"
 
 const saveSnapshot = async (boardId, label = "Auto-save") => {
   const shapes = mem.get(boardId)
-  if (!shapes) return
+  if (!shapes || shapes.size === 0) {
+    // Nothing to snapshot yet
+    return
+  }
   try {
-    // Flush main shapes first
-    await flushDirty()
-    // Keep max 5 snapshots per board
+    // Snapshot reads from in-memory Map (always most current)
+    const shapesObj = Object.fromEntries(shapes.entries())
+
+    // Also flush to BoardShapes in parallel
+    flushDirty().catch(() => {})
+
+    // Keep max 10 snapshots per board — delete oldest if over limit
     const count = await Snapshot.countDocuments({ boardId })
-    if (count >= 5) {
-      const oldest = await Snapshot.findOne({ boardId }).sort({ savedAt: 1 })
+    if (count >= 10) {
+      const oldest = await Snapshot.findOne({ boardId }).sort({ savedAt: 1 }).lean()
       if (oldest) await Snapshot.deleteOne({ _id: oldest._id })
     }
-    await Snapshot.create({ boardId, label, savedAt: new Date(), shapes: Object.fromEntries(shapes.entries()) })
+
+    await Snapshot.create({
+      boardId,
+      label,
+      savedAt: new Date(),
+      shapes:  shapesObj,
+    })
+    console.log(`[crdt] snapshot saved: board=${boardId} label="${label}" shapes=${shapes.size}`)
   } catch (e) {
     console.error(`[crdt] saveSnapshot ${boardId}:`, e.message)
   }
 }
 
 const restoreSnapshot = async (boardId, snapshotIndex) => {
-  const snaps = await Snapshot.find({ boardId }).sort({ savedAt: -1 })
+  // snapshotIndex 0 = newest (server returns sorted by savedAt desc)
+  const snaps = await Snapshot.find({ boardId }).sort({ savedAt: -1 }).lean()
+  console.log(`[crdt] restore: board=${boardId} index=${snapshotIndex} total=${snaps.length}`)
   const snap  = snaps[snapshotIndex]
-  if (!snap) throw new Error(`Snapshot ${snapshotIndex} not found`)
+  if (!snap) throw new Error(`Snapshot ${snapshotIndex} not found (only ${snaps.length} exist)`)
+
   const restored = new Map(Object.entries(snap.shapes || {}))
   mem.set(boardId, restored)
   dirty.add(boardId)
+  // Flush immediately so next join reads the restored state from MongoDB
   await flushDirty()
+  console.log(`[crdt] restored: board=${boardId} shapes=${restored.size}`)
 }
 
 const releaseDoc = async (boardId) => {

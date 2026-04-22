@@ -16,7 +16,7 @@ import { connectSocket, disconnectSocket } from "@/lib/socket"
 import { boardAPI } from "@/lib/api"
 import { useAuthGuard } from "@/lib/useAuth"
 
-const KonvaBoard = dynamic(() => import("./Konvaboard"), {
+const KonvaBoard = dynamic(() => import("./KonvaBoard"), {
   ssr: false,
   loading: () => (
     <div style={{ flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:"#58587a",fontFamily:"monospace",fontSize:13 }}>
@@ -256,7 +256,7 @@ export default function BoardPage() {
       const t=map[ev.key.toLowerCase()]; if(t){setTool(t);return}
       if ((ev.key==="Delete"||ev.key==="Backspace")&&selected.length>0) { selected.forEach(id=>deleteShape(id)); setSelected([]); return }
       if ((ev.metaKey||ev.ctrlKey)&&ev.key==="s"){ev.preventDefault();connectSocket().emit("board:snapshot",{boardId,label:"Manual save"})}
-      if (ev.key==="Escape"){setSelected([]);setPresentMode(false)}
+      if (ev.key==="Escape"){setSelected([]);setPresentMode(false);setReactionMode(false)}
       if ((ev.metaKey||ev.ctrlKey)&&ev.key==="p"){ev.preventDefault();handlePresentStart()}
     }
     window.addEventListener("keydown",onKey)
@@ -351,12 +351,20 @@ export default function BoardPage() {
 
   // ── Version history ──
   const loadSnapshots = async () => {
-    try { const d=await boardAPI.getSnapshots(boardId); setSnapshots([...d.snapshots].reverse()) } catch {}
     setShowVersions(true)
+    setSnapshots([])   // clear while loading
+    try {
+      const d = await boardAPI.getSnapshots(boardId)
+      const list = Array.isArray(d.snapshots) ? d.snapshots : []
+      setSnapshots(list)   // already sorted newest-first by server
+    } catch (err: any) {
+      console.error("loadSnapshots:", err.message)
+    }
   }
   const handleRewind = (index:number) => {
     connectSocket().emit("board:rewind",{boardId,snapshotIndex:index})
     setShowVersions(false)
+    setStatusMsg("Restoring...")
   }
 
   // ── Share ──
@@ -511,6 +519,7 @@ export default function BoardPage() {
               presentMode={presentMode} presentFocus={presentFocus}
               reactions={reactions} snapEnabled={snapEnabled}
               reactionEmoji={activeReaction}
+              reactionMode={reactionMode}
             />
           )}
 
@@ -781,7 +790,7 @@ export default function BoardPage() {
           <div className="modal" style={{background:surface,borderColor:border,color:text}} onClick={e=>e.stopPropagation()}>
             <div className="modal-hdr"><h3>Version history</h3><button className="icon-btn" onClick={()=>setShowVersions(false)}>✕</button></div>
             <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"50vh",overflowY:"auto"}}>
-              {snapshots.length===0?<p className="mono" style={{fontSize:12,color:muted}}>No snapshots yet.</p>
+              {snapshots.length===0?<p className="mono" style={{fontSize:12,color:muted,padding:"8px 0"}}>No saved versions yet. Board auto-saves every 60s, or press Ctrl+S to save now.</p>
                 :snapshots.map(s=>(
                 <div key={s.index} style={{display:"flex",alignItems:"center",gap:12,background:dm?"#1a1a22":"#f1f5f9",border:`1px solid ${border}`,borderRadius:10,padding:"10px 12px"}}>
                   <div style={{flex:1}}>
